@@ -1,9 +1,9 @@
 from datetime import datetime, time
 from django.core.mail import send_mail
 from tasks.models import Task, Report
-
+from datetime import datetime, timedelta, timezone
 from task_manager.celery import app
-
+from django.db import transaction
 
 @app.task
 def send_email_report(report):
@@ -30,15 +30,17 @@ def send_email_report(report):
 @app.task
 def periodic_emailer():
     currentTime = datetime.now()
-    reports = Report.objects.filter(
-        send_time__range=(
-            time(currentTime.hour, currentTime.minute, 0),
-            time(currentTime.hour, currentTime.minute, 59)
-        ),
-        confirmation=True
-    )
-    for r in reports:
-        send_email_report(r)
+    start = currentTime(timezone.utc) - timedelta(days=1)
+    with transaction.atomic():
+        reports = Report.objects.select_for_update().filter(
+            last_updated__lt=start,
+            confirmation=True
+        )
+        for r in reports:
+            send_email_report(r)
+            r.last_updated = datetime.now(timezone.utc).replace(hour=r.time.hour, minute=r.time.minute,
+                second=r.time.second)
+            r.save()
 
 
 app.conf.beat_schedule={"send-task-report" : {
